@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WA AutoSender
 // @namespace    https://github.com/ralfiannor/wa-autosender
-// @version      1.3.0
+// @version      1.3.1
 // @description  WhatsApp Web auto-sender — send repeated messages to a contact
 // @author       ralfiannor
 // @match        https://web.whatsapp.com/*
@@ -50,15 +50,8 @@
     // Top bar / contact name
     activeContactName: '#main header span[title], #main header span[dir="auto"]',
 
-    // Chat messages area
+    // Chat messages area — the scrollable container holding all messages
     chatMessages: '#main div[role="application"]',
-
-    // Incoming message bubbles (from contact, not from us)
-    incomingMessage: [
-      '#main .message-in',
-      '#main div[class*="message-in"]',
-      '#main div[data-id]:not([data-id*="from_me"])',
-    ].join(', '),
   };
 
   function querySelector(selectorStr) {
@@ -645,17 +638,18 @@
 
           if (waitReply) {
             // ── Wait for reply mode ──
-            // Count incoming messages before waiting
-            const incomingBefore = querySelectorAll(SELECTORS.incomingMessage).length;
-            Logger.info(`⏳ Waiting for reply... (timeout: ${replyTimeout}s)`);
+            // After our message is sent & rendered, snapshot the message count.
+            // Any NEW message appearing after this snapshot = reply from contact.
+            await this._sleep(1500); // wait for our message to render in DOM
+            const snapshot = this._countChatMessages();
+            Logger.info(`⏳ Waiting for reply... (timeout: ${replyTimeout}s, snapshot: ${snapshot} msgs)`);
 
-            const replyReceived = await this._waitForReply(incomingBefore, replyTimeout * 1000);
+            const replyReceived = await this._waitForReply(snapshot, replyTimeout * 1000);
 
             if (this._stopped) break;
 
             if (replyReceived) {
               Logger.success('Reply received!');
-              // Small delay after reply to simulate typing
               Logger.info(`Typing delay: ${postReplyDelay}s...`);
               await this._sleepInterruptible(postReplyDelay * 1000);
             } else {
@@ -686,12 +680,53 @@
       FloatingPanel.setRunning(false);
     },
 
-    // Wait for a new incoming message to appear in the chat.
-    // Returns true if reply detected, false if timeout.
-    _waitForReply(incomingBefore, timeoutMs) {
+    // Count all message-like elements in the current chat.
+    // Uses multiple strategies to find messages since WhatsApp Web
+    // changes its DOM structure frequently.
+    _countChatMessages() {
+      const main = document.querySelector('#main');
+      if (!main) return 0;
+
+      // Strategy 1: elements with data-id (most reliable — each message has one)
+      const byDataId = main.querySelectorAll('div[data-id]').length;
+      if (byDataId > 0) {
+        Logger.info(`[detect] Found ${byDataId} messages via data-id`);
+        return byDataId;
+      }
+
+      // Strategy 2: copy-text containers (message text content)
+      const byCopyText = main.querySelectorAll('span.selectable-text, span[dir="ltr"], span[dir="rtl"]').length;
+      if (byCopyText > 0) {
+        Logger.info(`[detect] Found ${byCopyText} messages via selectable-text`);
+        return byCopyText;
+      }
+
+      // Strategy 3: message bubbles with class patterns
+      const byClass = main.querySelectorAll('[class*="msg"], [class*="message"], [class*="bubble"]').length;
+      if (byClass > 0) {
+        Logger.info(`[detect] Found ${byClass} messages via class patterns`);
+        return byClass;
+      }
+
+      // Strategy 4: fallback — count children in the chat application area
+      const appArea = main.querySelector('div[role="application"]');
+      if (appArea) {
+        const children = appArea.querySelectorAll(':scope > div > div').length;
+        Logger.info(`[detect] Fallback: ${children} elements in chat area`);
+        return children;
+      }
+
+      Logger.info('[detect] Could not find any message elements');
+      return 0;
+    },
+
+    // Wait for the message count in chat to increase (new message = reply).
+    // Returns true if count increased, false if timeout.
+    _waitForReply(snapshotCount, timeoutMs) {
       return new Promise((resolve) => {
-        // Poll for new incoming messages
         const startTime = Date.now();
+        let lastDebug = 0;
+
         const pollInterval = setInterval(() => {
           if (this._stopped) {
             clearInterval(pollInterval);
@@ -699,25 +734,32 @@
             return;
           }
 
-          const incomingNow = querySelectorAll(SELECTORS.incomingMessage).length;
-          if (incomingNow > incomingBefore) {
+          const currentCount = this._countChatMessages();
+          if (currentCount > snapshotCount) {
             clearInterval(pollInterval);
             resolve(true);
             return;
           }
 
+          // Debug log every 10 seconds
+          const elapsed = Date.now() - startTime;
+          if (elapsed - lastDebug >= 10000) {
+            lastDebug = elapsed;
+            Logger.info(`[detect] Still waiting... (${Math.round(elapsed / 1000)}s elapsed, count: ${currentCount}/${snapshotCount})`);
+          }
+
           // Timeout check
-          if (Date.now() - startTime >= timeoutMs) {
+          if (elapsed >= timeoutMs) {
             clearInterval(pollInterval);
             resolve(false);
           }
-        }, 500);
+        }, 1000);
 
         // Hard timeout safety net
         setTimeout(() => {
           clearInterval(pollInterval);
           resolve(false);
-        }, timeoutMs + 1000);
+        }, timeoutMs + 2000);
       });
     },
 
@@ -767,7 +809,7 @@
     await waitForWhatsAppReady();
     console.log('[WA AutoSender] WhatsApp Web ready. Initializing panel...');
     FloatingPanel.create();
-    Logger.info('WA AutoSender v1.3.0 loaded. Ready to send.');
+    Logger.info('WA AutoSender v1.3.1 loaded. Ready to send.');
     Logger.info('Tip: Check "⏳ Wait for reply" to send only after contact responds.');
   }
 
