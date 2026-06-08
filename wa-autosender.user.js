@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WA AutoSender
 // @namespace    https://github.com/ralfiannor/wa-autosender
-// @version      1.3.3
+// @version      1.4.0
 // @description  WhatsApp Web auto-sender — send repeated messages to a contact
 // @author       ralfiannor
 // @match        https://web.whatsapp.com/*
@@ -192,6 +192,7 @@
           <div style="margin-top:10px;display:flex;justify-content:space-between;align-items:center;">
             <span style="font-size:11px;color:#999;">Activity Log</span>
             <div style="display:flex;gap:4px;">
+              <button id="was-debug-dom" title="Dump chat DOM structure" style="background:#fff3cd;border:1px solid #ffc107;border-radius:4px;padding:2px 8px;font-size:11px;cursor:pointer;">🔍 Debug</button>
               <button id="was-copy-log" title="Copy log to clipboard" style="background:#f0f0f0;border:1px solid #ddd;border-radius:4px;padding:2px 8px;font-size:11px;cursor:pointer;">📋 Copy</button>
               <button id="was-clear-log" title="Clear log" style="background:#f0f0f0;border:1px solid #ddd;border-radius:4px;padding:2px 8px;font-size:11px;cursor:pointer;">🗑 Clear</button>
             </div>
@@ -250,6 +251,11 @@
       // Clear log button
       panel.querySelector('#was-clear-log').addEventListener('click', () => {
         this._inputs.logDiv.innerHTML = '';
+      });
+
+      // Debug DOM button — dump chat area structure
+      panel.querySelector('#was-debug-dom').addEventListener('click', () => {
+        DebugHelper.dumpChatDOM();
       });
 
       // Button events
@@ -343,6 +349,76 @@
   // Dumps sidebar DOM structure to log for debugging selector issues.
 
   const DebugHelper = {
+    dumpChatDOM() {
+      const main = document.querySelector('#main');
+      if (!main) {
+        Logger.error('Debug: #main not found — no chat is open');
+        return;
+      }
+
+      Logger.info('═══ DEBUG: Chat DOM dump ═══');
+
+      // Level 1: #main direct children
+      const mainChildren = Array.from(main.children);
+      Logger.info(`#main has ${mainChildren.length} children:`);
+      mainChildren.forEach((el, i) => {
+        const tag = el.tagName.toLowerCase();
+        const id = el.id || '-';
+        const role = el.getAttribute('role') || '-';
+        const cls = (el.className || '').toString().substring(0, 80);
+        Logger.info(`  [L1-${i}] <${tag}> id="${id}" role="${role}" class="${cls}"`);
+      });
+
+      // Level 2: go deeper into each L1 child
+      mainChildren.forEach((el, i) => {
+        const grandchildren = Array.from(el.children);
+        if (grandchildren.length > 0 && grandchildren.length <= 10) {
+          grandchildren.forEach((gc, j) => {
+            const tag = gc.tagName.toLowerCase();
+            const id = gc.id || '-';
+            const role = gc.getAttribute('role') || '-';
+            const cls = (gc.className || '').toString().substring(0, 60);
+            Logger.info(`  [L2-${i}.${j}] <${tag}> id="${id}" role="${role}" class="${cls}"`);
+          });
+        } else if (grandchildren.length > 10) {
+          Logger.info(`  [L2-${i}] ${grandchildren.length} children (showing first 3)`);
+          grandchildren.slice(0, 3).forEach((gc, j) => {
+            const tag = gc.tagName.toLowerCase();
+            const role = gc.getAttribute('role') || '-';
+            const cls = (gc.className || '').toString().substring(0, 60);
+            Logger.info(`  [L2-${i}.${j}] <${tag}> role="${role}" class="${cls}"`);
+          });
+        }
+      });
+
+      // Try all our selectors and report what they find
+      Logger.info('── Selector tests ──');
+      const tests = [
+        ['#main div[data-id]', '#main div[data-id]'],
+        ['#main .message-in', '#main .message-in'],
+        ['#main [class*="message"]', '#main [class*="message"]'],
+        ['#main [class*="msg"]', '#main [class*="msg"]'],
+        ['#main [class*="bubble"]', '#main [class*="bubble"]'],
+        ['#main span.selectable-text', '#main span.selectable-text'],
+        ['#main span[dir]', '#main span[dir]'],
+        ['#main div[role="application"]', '#main div[role="application"]'],
+        ['#main div[role="row"]', '#main div[role="row"]'],
+        ['#main div[role="listitem"]', '#main div[role="listitem"]'],
+        ['#main [data-tab]', '#main [data-tab]'],
+        ['#main footer', '#main footer'],
+      ];
+      tests.forEach(([label, sel]) => {
+        const count = document.querySelectorAll(sel).length;
+        Logger.info(`  ${label}: ${count} found`);
+      });
+
+      // Dump total element count and HTML size as fingerprint
+      const totalEls = main.querySelectorAll('*').length;
+      const htmlLen = main.innerHTML.length;
+      Logger.info(`── #main fingerprint: ${totalEls} elements, ${htmlLen} chars HTML ──`);
+      Logger.info('═══ DEBUG END ═══');
+    },
+
     dumpSearchResults() {
       const paneSide = document.querySelector('#pane-side');
       const side = document.querySelector('#side');
@@ -638,8 +714,8 @@
             if (waitReply) {
               // ── Wait for reply mode ──
               await this._sleep(1500); // wait for our message to render in DOM
-              const snapshot = this._countChatMessages();
-              Logger.info(`⏳ Waiting for reply... (timeout: ${replyTimeout}s, snapshot: ${snapshot} msgs)`);
+              const snapshot = this._getChatFingerprint();
+              Logger.info(`⏳ Waiting for reply... (timeout: ${replyTimeout}s, fingerprint: ${snapshot})`);
 
               const replyReceived = await this._waitForReply(snapshot, replyTimeout * 1000);
 
@@ -687,49 +763,26 @@
       FloatingPanel.setRunning(false);
     },
 
-    // Count all message-like elements in the current chat.
-    // Uses multiple strategies to find messages since WhatsApp Web
-    // changes its DOM structure frequently.
-    _countChatMessages() {
+    // Get a fingerprint of the chat content.
+    // Doesn't rely on specific selectors — just measures the total DOM
+    // content size. Any new message will change this value.
+    _getChatFingerprint() {
       const main = document.querySelector('#main');
       if (!main) return 0;
 
-      // Strategy 1: elements with data-id (most reliable — each message has one)
-      const byDataId = main.querySelectorAll('div[data-id]').length;
-      if (byDataId > 0) {
-        Logger.info(`[detect] Found ${byDataId} messages via data-id`);
-        return byDataId;
-      }
+      // Primary: innerHTML length (most reliable — any new content changes it)
+      const htmlLen = main.innerHTML.length;
 
-      // Strategy 2: copy-text containers (message text content)
-      const byCopyText = main.querySelectorAll('span.selectable-text, span[dir="ltr"], span[dir="rtl"]').length;
-      if (byCopyText > 0) {
-        Logger.info(`[detect] Found ${byCopyText} messages via selectable-text`);
-        return byCopyText;
-      }
+      // Secondary: total element count
+      const elCount = main.querySelectorAll('*').length;
 
-      // Strategy 3: message bubbles with class patterns
-      const byClass = main.querySelectorAll('[class*="msg"], [class*="message"], [class*="bubble"]').length;
-      if (byClass > 0) {
-        Logger.info(`[detect] Found ${byClass} messages via class patterns`);
-        return byClass;
-      }
-
-      // Strategy 4: fallback — count children in the chat application area
-      const appArea = main.querySelector('div[role="application"]');
-      if (appArea) {
-        const children = appArea.querySelectorAll(':scope > div > div').length;
-        Logger.info(`[detect] Fallback: ${children} elements in chat area`);
-        return children;
-      }
-
-      Logger.info('[detect] Could not find any message elements');
-      return 0;
+      // Combine both for a stable fingerprint
+      return htmlLen + elCount;
     },
 
-    // Wait for the message count in chat to increase (new message = reply).
-    // Returns true if count increased, false if timeout.
-    _waitForReply(snapshotCount, timeoutMs) {
+    // Wait for the chat fingerprint to change (new content = reply).
+    // Returns true if change detected, false if timeout.
+    _waitForReply(snapshotFingerprint, timeoutMs) {
       return new Promise((resolve) => {
         const startTime = Date.now();
         let lastDebug = 0;
@@ -741,18 +794,19 @@
             return;
           }
 
-          const currentCount = this._countChatMessages();
-          if (currentCount > snapshotCount) {
+          const currentFingerprint = this._getChatFingerprint();
+          // Fingerprint changed = new content added to chat = reply
+          if (currentFingerprint !== snapshotFingerprint) {
             clearInterval(pollInterval);
             resolve(true);
             return;
           }
 
-          // Debug log every 10 seconds
+          // Debug log every 15 seconds
           const elapsed = Date.now() - startTime;
-          if (elapsed - lastDebug >= 10000) {
+          if (elapsed - lastDebug >= 15000) {
             lastDebug = elapsed;
-            Logger.info(`[detect] Still waiting... (${Math.round(elapsed / 1000)}s elapsed, count: ${currentCount}/${snapshotCount})`);
+            Logger.info(`⏳ Still waiting... (${Math.round(elapsed / 1000)}s / ${Math.round(timeoutMs / 1000)}s)`);
           }
 
           // Timeout check
@@ -820,7 +874,8 @@
     await waitForWhatsAppReady();
     console.log('[WA AutoSender] WhatsApp Web ready. Initializing panel...');
     FloatingPanel.create();
-    Logger.info('WA AutoSender v1.3.3 loaded. Ready to send.');
+    Logger.info('WA AutoSender v1.4.0 loaded. Ready to send.');
+    Logger.info('Tip: Click 🔍 Debug then 📋 Copy to help fix selectors.');
     Logger.info('Tip: Check "⏳ Wait for reply" to send only after contact responds.');
   }
 
