@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WA AutoSender
 // @namespace    https://github.com/ralfiannor/wa-autosender
-// @version      1.0.0
+// @version      1.0.1
 // @description  WhatsApp Web auto-sender — send repeated messages to a contact
 // @author       ralfiannor
 // @match        https://web.whatsapp.com/*
@@ -19,38 +19,56 @@
   // Strategy: use stable attributes first, then fallbacks.
 
   const SELECTORS = {
-    // Search / new chat
-    searchButton: '[data-tab="search"] div[role="button"], header div[role="button"]',
-    searchInput: 'div[contenteditable="true"][data-tab="3"], div[contenteditable="true"][title="Search input textbox"]',
-    searchInputAlt: 'div[contenteditable="true"][role="textbox"]',
-    searchResultItem: '[data-animate-status-msg="true"], [role="listitem"]',
+    // Sidebar search — WhatsApp Web left panel search bar
+    searchInput: [
+      '#side div[contenteditable="true"]',
+      'div[contenteditable="true"][data-tab="3"]',
+      'div[contenteditable="true"][title="Search input textbox"]',
+      '#side [role="textbox"]',
+      'header div[contenteditable="true"]',
+    ].join(', '),
+
+    // Search result items in the sidebar
+    searchResultItem: [
+      '#side [role="listitem"]',
+      '#pane-side [role="listitem"]',
+      '#side div[style*="height"][role="listitem"]',
+      'div[data-animate-status-msg="true"]',
+    ].join(', '),
 
     // Chat panel
     chatPanel: '#main',
-    messageInput: 'div[contenteditable="true"][data-tab="10"], div[contenteditable="true"][title="Type a message"]',
-    messageInputAlt: '#main footer div[contenteditable="true"]',
-    sendButton: 'button[data-tab="11"], button[aria-label="Send"], span[data-icon="send"]',
+
+    // Message input box in the active chat
+    messageInput: [
+      '#main footer div[contenteditable="true"]',
+      'div[contenteditable="true"][data-tab="10"]',
+      'div[contenteditable="true"][title="Type a message"]',
+      '#main div[contenteditable="true"][role="textbox"]',
+    ].join(', '),
+
+    // Send button
+    sendButton: [
+      '#main footer button[data-tab="11"]',
+      '#main footer button[aria-label="Send"]',
+      '#main footer span[data-icon="send"]',
+      '#main footer button span[data-icon="send"]',
+    ].join(', '),
 
     // Top bar / contact name
     activeContactName: '#main header span[title], #main header span[dir="auto"]',
   };
 
-  function querySelector(selectors) {
-    const list = typeof selectors === 'string' ? [selectors] : selectors;
-    for (const sel of list) {
-      const el = document.querySelector(sel);
-      if (el) return el;
-    }
-    return null;
+  // Try a single CSS selector string (may contain commas for fallbacks).
+  // Returns the first matching element, or null.
+  function querySelector(selectorStr) {
+    return document.querySelector(selectorStr);
   }
 
-  function querySelectorAll(selectors) {
-    const list = typeof selectors === 'string' ? [selectors] : selectors;
-    for (const sel of list) {
-      const els = document.querySelectorAll(sel);
-      if (els.length) return els;
-    }
-    return [];
+  // Returns all matching elements, or empty array.
+  function querySelectorAll(selectorStr) {
+    const els = document.querySelectorAll(selectorStr);
+    return els.length ? Array.from(els) : [];
   }
 
   // ─── Logger ────────────────────────────────────────────────────────
@@ -259,100 +277,56 @@
   // ─── ContactFinder ────────────────────────────────────────────────
 
   const ContactFinder = {
-    TIMEOUT_MS: 8000,
 
     async findAndOpen(contact) {
       if (!contact) throw new Error('Contact is empty');
 
-      // Phone number detection: starts with + or is all digits
-      const isPhoneNumber = /^[\+]?[0-9\s\-]+$/.test(contact);
+      // Normalize: strip whitespace
+      const query = contact.trim();
 
-      if (isPhoneNumber) {
-        return this._findByPhone(contact.replace(/[\s\-]/g, ''));
-      }
-      return this._findByName(contact);
-    },
+      // Step 1: Find the sidebar search input
+      const searchInput = querySelector(SELECTORS.searchInput);
+      if (!searchInput) throw new Error('Search input not found. Is WhatsApp Web fully loaded?');
 
-    async _findByName(name) {
-      Logger.info(`Searching contact: "${name}"`);
+      Logger.info(`Searching: "${query}"`);
 
-      // Click search button / start new chat
-      const searchBtn = querySelector(SELECTORS.searchButton);
-      if (!searchBtn) throw new Error('Search button not found. Is WhatsApp Web fully loaded?');
-      searchBtn.click();
-      await this._sleep(600);
-
-      // Focus and clear search input
-      const searchInput = querySelector([SELECTORS.searchInput, SELECTORS.searchInputAlt]);
-      if (!searchInput) throw new Error('Search input not found');
-
+      // Step 2: Click to focus the search input
       searchInput.focus();
-      // Select all + delete to clear previous search
+      await this._sleep(300);
+
+      // Step 3: Clear any existing text (select all → delete)
       document.execCommand('selectAll', false, null);
       document.execCommand('delete', false, null);
       await this._sleep(200);
 
-      // Type name character by character for React to pick up
-      for (const char of name) {
+      // Step 4: Type the query character by character so React picks it up
+      for (const char of query) {
         document.execCommand('insertText', false, char);
-        await this._sleep(50);
+        await this._sleep(30);
       }
-      await this._sleep(2000);
+      await this._sleep(2500);
 
-      // Click first matching result
+      // Step 5: Find and click the first search result
       const results = querySelectorAll(SELECTORS.searchResultItem);
       if (!results.length) {
-        throw new Error(`No results found for "${name}"`);
+        throw new Error(`No results found for "${query}"`);
       }
 
-      // Click the first result
-      results[0].click();
-      await this._sleep(1000);
+      const firstResult = results[0];
+      firstResult.click();
+      await this._sleep(1500);
 
-      // Close search panel (press Escape)
-      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', bubbles: true }));
+      // Step 6: Verify chat panel opened
+      const chatPanel = querySelector(SELECTORS.chatPanel);
+      if (!chatPanel) {
+        throw new Error('Chat panel did not open. Contact may not exist.');
+      }
+
+      // Step 7: Clear the search box (press Escape to close search overlay)
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true }));
       await this._sleep(500);
 
-      Logger.success(`Opened chat with "${name}"`);
-    },
-
-    async _findByPhone(number) {
-      Logger.info(`Opening chat by phone number: ${number}`);
-
-      // Use WhatsApp's deep link to open chat with phone number
-      const cleanNumber = number.replace(/[^0-9]/g, '');
-      const url = `https://web.whatsapp.com/send?phone=${cleanNumber}`;
-
-      // Navigate without full page reload if possible
-      window.location.href = url;
-      await this._sleep(3000);
-
-      // Wait for chat panel to appear
-      const chatPanel = await this._waitForElement(SELECTORS.chatPanel, 10000);
-      if (!chatPanel) {
-        throw new Error(`Could not open chat with number ${number}. Number may not be on WhatsApp.`);
-      }
-
-      Logger.success(`Opened chat with ${number}`);
-    },
-
-    _waitForElement(selector, timeoutMs) {
-      return new Promise((resolve) => {
-        const el = querySelector(selector);
-        if (el) return resolve(el);
-
-        const start = Date.now();
-        const interval = setInterval(() => {
-          const el = querySelector(selector);
-          if (el) {
-            clearInterval(interval);
-            resolve(el);
-          } else if (Date.now() - start > timeoutMs) {
-            clearInterval(interval);
-            resolve(null);
-          }
-        }, 300);
-      });
+      Logger.success(`Opened chat for "${query}"`);
     },
 
     _sleep(ms) {
@@ -367,7 +341,7 @@
       if (!message) throw new Error('Message is empty');
 
       // Find the message input box
-      const input = querySelector([SELECTORS.messageInput, SELECTORS.messageInputAlt]);
+      const input = querySelector(SELECTORS.messageInput);
       if (!input) throw new Error('Message input not found. Open a chat first.');
 
       input.focus();
