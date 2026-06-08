@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WA AutoSender
 // @namespace    https://github.com/ralfiannor/wa-autosender
-// @version      1.2.0
+// @version      1.3.0
 // @description  WhatsApp Web auto-sender — send repeated messages to a contact
 // @author       ralfiannor
 // @match        https://web.whatsapp.com/*
@@ -49,6 +49,16 @@
 
     // Top bar / contact name
     activeContactName: '#main header span[title], #main header span[dir="auto"]',
+
+    // Chat messages area
+    chatMessages: '#main div[role="application"]',
+
+    // Incoming message bubbles (from contact, not from us)
+    incomingMessage: [
+      '#main .message-in',
+      '#main div[class*="message-in"]',
+      '#main div[data-id]:not([data-id*="from_me"])',
+    ].join(', '),
   };
 
   function querySelector(selectorStr) {
@@ -160,6 +170,24 @@
             <input id="was-random-range" type="number" value="2" min="0" max="60" step="0.5" style="width:100%;box-sizing:border-box;padding:6px 8px;border:1px solid #ccc;border-radius:6px;font-size:13px;outline:none;" />
           </div>
 
+          <div style="margin-bottom:10px;padding:8px;background:#f0faf5;border:1px solid #d4edda;border-radius:6px;">
+            <label style="font-size:12px;display:flex;align-items:center;gap:6px;margin-bottom:4px;">
+              <input id="was-wait-reply" type="checkbox" style="cursor:pointer;" />
+              <span style="font-weight:600;">⏳ Wait for reply before next send</span>
+            </label>
+            <div style="font-size:11px;color:#666;margin-left:20px;margin-bottom:6px;">Sends next message only after contact replies, not on a timer</div>
+            <div style="display:flex;gap:8px;margin-left:20px;">
+              <div style="flex:1;">
+                <label style="font-size:10px;font-weight:600;display:block;margin-bottom:2px;color:#666;">Reply timeout (sec)</label>
+                <input id="was-reply-timeout" type="number" value="120" min="10" max="3600" style="width:100%;box-sizing:border-box;padding:4px 6px;border:1px solid #ccc;border-radius:4px;font-size:12px;outline:none;" />
+              </div>
+              <div style="flex:1;">
+                <label style="font-size:10px;font-weight:600;display:block;margin-bottom:2px;color:#666;">Post-reply delay (sec)</label>
+                <input id="was-post-reply-delay" type="number" value="2" min="0.5" max="30" step="0.5" style="width:100%;box-sizing:border-box;padding:4px 6px;border:1px solid #ccc;border-radius:4px;font-size:12px;outline:none;" />
+              </div>
+            </div>
+          </div>
+
           <button id="was-start" style="width:100%;padding:10px;background:#25D366;color:#fff;border:none;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;transition:background .2s;">
             ▶ Start Sending
           </button>
@@ -190,6 +218,9 @@
         delay: panel.querySelector('#was-delay'),
         randomToggle: panel.querySelector('#was-random-toggle'),
         randomRange: panel.querySelector('#was-random-range'),
+        waitReply: panel.querySelector('#was-wait-reply'),
+        replyTimeout: panel.querySelector('#was-reply-timeout'),
+        postReplyDelay: panel.querySelector('#was-post-reply-delay'),
         startBtn: panel.querySelector('#was-start'),
         progressDiv: panel.querySelector('#was-progress'),
         progressText: panel.querySelector('#was-progress-text'),
@@ -257,6 +288,9 @@
         repeat: parseInt(this._inputs.repeat.value, 10) || 1,
         delay: parseFloat(this._inputs.delay.value) || 5,
         randomDelay: this._inputs.randomToggle.checked ? (parseFloat(this._inputs.randomRange.value) || 0) : 0,
+        waitReply: this._inputs.waitReply.checked,
+        replyTimeout: parseFloat(this._inputs.replyTimeout.value) || 120,
+        postReplyDelay: parseFloat(this._inputs.postReplyDelay.value) || 2,
       };
     },
 
@@ -556,7 +590,7 @@
     running: false,
     _stopped: false,
 
-    async start({ useCurrentChat, contact, message, repeat, delay, randomDelay }) {
+    async start({ useCurrentChat, contact, message, repeat, delay, randomDelay, waitReply, replyTimeout, postReplyDelay }) {
       if (this.running) return;
 
       // Validate inputs
@@ -571,8 +605,7 @@
 
       // If "send to current chat" is enabled, skip contact search
       if (useCurrentChat) {
-        Logger.info(`Starting: ${repeat}x to current chat`);
-        // Verify a chat is actually open
+        Logger.info(`Starting: ${repeat}x to current chat${waitReply ? ' (wait for reply)' : ''}`);
         const chatPanel = querySelector(SELECTORS.chatPanel);
         if (!chatPanel) {
           Logger.error('No chat is open. Open a chat first, then start.');
@@ -581,7 +614,7 @@
         }
       } else {
         if (!contact) { Logger.error('Contact is required (or check "Send to current chat")'); this._finish(); return; }
-        Logger.info(`Starting: ${repeat}x to "${contact}"`);
+        Logger.info(`Starting: ${repeat}x to "${contact}"${waitReply ? ' (wait for reply)' : ''}`);
 
         try {
           await ContactFinder.findAndOpen(contact);
@@ -609,9 +642,32 @@
 
         // Wait before next iteration (skip after last message)
         if (i < repeat - 1 && !this._stopped) {
-          const actualDelay = this._calcDelay(delay, randomDelay);
-          Logger.info(`Waiting ${actualDelay.toFixed(1)}s...`);
-          await this._sleepInterruptible(actualDelay * 1000);
+
+          if (waitReply) {
+            // ── Wait for reply mode ──
+            // Count incoming messages before waiting
+            const incomingBefore = querySelectorAll(SELECTORS.incomingMessage).length;
+            Logger.info(`⏳ Waiting for reply... (timeout: ${replyTimeout}s)`);
+
+            const replyReceived = await this._waitForReply(incomingBefore, replyTimeout * 1000);
+
+            if (this._stopped) break;
+
+            if (replyReceived) {
+              Logger.success('Reply received!');
+              // Small delay after reply to simulate typing
+              Logger.info(`Typing delay: ${postReplyDelay}s...`);
+              await this._sleepInterruptible(postReplyDelay * 1000);
+            } else {
+              Logger.warn(`⏰ No reply after ${replyTimeout}s. Stopping.`);
+              break;
+            }
+          } else {
+            // ── Timer delay mode (original) ──
+            const actualDelay = this._calcDelay(delay, randomDelay);
+            Logger.info(`Waiting ${actualDelay.toFixed(1)}s...`);
+            await this._sleepInterruptible(actualDelay * 1000);
+          }
         }
       }
 
@@ -628,6 +684,41 @@
       this.running = false;
       this._stopped = false;
       FloatingPanel.setRunning(false);
+    },
+
+    // Wait for a new incoming message to appear in the chat.
+    // Returns true if reply detected, false if timeout.
+    _waitForReply(incomingBefore, timeoutMs) {
+      return new Promise((resolve) => {
+        // Poll for new incoming messages
+        const startTime = Date.now();
+        const pollInterval = setInterval(() => {
+          if (this._stopped) {
+            clearInterval(pollInterval);
+            resolve(false);
+            return;
+          }
+
+          const incomingNow = querySelectorAll(SELECTORS.incomingMessage).length;
+          if (incomingNow > incomingBefore) {
+            clearInterval(pollInterval);
+            resolve(true);
+            return;
+          }
+
+          // Timeout check
+          if (Date.now() - startTime >= timeoutMs) {
+            clearInterval(pollInterval);
+            resolve(false);
+          }
+        }, 500);
+
+        // Hard timeout safety net
+        setTimeout(() => {
+          clearInterval(pollInterval);
+          resolve(false);
+        }, timeoutMs + 1000);
+      });
     },
 
     _calcDelay(base, randomRange) {
@@ -676,8 +767,8 @@
     await waitForWhatsAppReady();
     console.log('[WA AutoSender] WhatsApp Web ready. Initializing panel...');
     FloatingPanel.create();
-    Logger.info('WA AutoSender v1.2.0 loaded. Ready to send.');
-    Logger.info('Tip: Check "Send to current chat" to skip contact search.');
+    Logger.info('WA AutoSender v1.3.0 loaded. Ready to send.');
+    Logger.info('Tip: Check "⏳ Wait for reply" to send only after contact responds.');
   }
 
   init();
