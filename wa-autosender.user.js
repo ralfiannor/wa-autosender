@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WA AutoSender
 // @namespace    https://github.com/ralfiannor/wa-autosender
-// @version      1.5.0
+// @version      1.5.1
 // @description  WhatsApp Web auto-sender — send repeated messages to a contact
 // @author       ralfiannor
 // @match        https://web.whatsapp.com/*
@@ -764,28 +764,23 @@
     },
 
     // Get a fingerprint of the chat content.
-    // Uses querySelectorAll from document root — proven to work per debug dump
-    // where #main div[data-id] found 28 elements and #main div[role="row"] found 28.
+    // Combines 3 proven-working metrics into one composite number.
+    // If ANY metric changes (new message, content change, etc), fingerprint changes.
     _getChatFingerprint() {
-      // Strategy 1: count div[data-id] inside #main (confirmed working: 28 found)
       const dataIdCount = document.querySelectorAll('#main div[data-id]').length;
-      if (dataIdCount > 0) return dataIdCount;
-
-      // Strategy 2: count div[role="row"] inside #main (confirmed working: 28 found)
       const rowCount = document.querySelectorAll('#main div[role="row"]').length;
-      if (rowCount > 0) return rowCount;
+      const spanDirCount = document.querySelectorAll('#main span[dir]').length;
 
-      // Strategy 3: count span[dir] inside #main (confirmed working: 58 found)
-      const spanCount = document.querySelectorAll('#main span[dir]').length;
-      if (spanCount > 0) return spanCount;
-
-      // Fallback: total element count from document
-      const main = document.querySelector('#main');
-      if (main) {
-        return main.querySelectorAll('*').length;
+      // Also capture the last span[dir] text as a "content hash"
+      const allSpans = document.querySelectorAll('#main span[dir]');
+      let lastText = '';
+      if (allSpans.length > 0) {
+        const lastSpan = allSpans[allSpans.length - 1];
+        lastText = (lastSpan.textContent || '').substring(0, 30);
       }
 
-      return 0;
+      // Combine: number + string for uniqueness
+      return `${dataIdCount}-${rowCount}-${spanDirCount}-${lastText}`;
     },
 
     // Wait for the chat fingerprint to change (new content = reply).
@@ -882,7 +877,7 @@
     await waitForWhatsAppReady();
     console.log('[WA AutoSender] WhatsApp Web ready. Initializing panel...');
     FloatingPanel.create();
-    Logger.info('WA AutoSender v1.5.0 loaded. Ready to send.');
+    Logger.info('WA AutoSender v1.5.1 loaded. Ready to send.');
     Logger.info('Tip: Check "⏳ Wait for reply" to send only after contact responds.');
   }
 
