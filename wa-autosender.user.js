@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WA AutoSender
 // @namespace    https://github.com/ralfiannor/wa-autosender
-// @version      1.6.0
+// @version      1.6.1
 // @description  WhatsApp Web auto-sender — send repeated messages to a contact
 // @author       ralfiannor
 // @match        https://web.whatsapp.com/*
@@ -823,9 +823,9 @@
     },
 
     _calcDelay(base, randomRange) {
-      if (randomRange <= 0) return Math.max(1, base);
-      const offset = (Math.random() * 2 - 1) * randomRange;
-      return Math.max(1, base + offset);
+      if (randomRange <= 0) return base;
+      // Base is the minimum, random adds on top
+      return base + (Math.random() * randomRange);
     },
 
     _sleep(ms) {
@@ -872,7 +872,7 @@
     await waitForWhatsAppReady();
     console.log('[WA AutoSender] WhatsApp Web ready. Initializing panel...');
     FloatingPanel.create();
-    Logger.info('WA AutoSender v1.6.0 loaded. Ready to send.');
+    Logger.info('WA AutoSender v1.6.1 loaded. Ready to send.');
     Logger.info('Tip: Check "⏳ Wait for reply" to send only after contact responds.');
   }
 
