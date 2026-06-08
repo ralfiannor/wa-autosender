@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WA AutoSender
 // @namespace    https://github.com/ralfiannor/wa-autosender
-// @version      1.5.1
+// @version      1.6.0
 // @description  WhatsApp Web auto-sender — send repeated messages to a contact
 // @author       ralfiannor
 // @match        https://web.whatsapp.com/*
@@ -168,15 +168,11 @@
               <input id="was-wait-reply" type="checkbox" style="cursor:pointer;" />
               <span style="font-weight:600;">⏳ Wait for reply before next send</span>
             </label>
-            <div style="font-size:11px;color:#666;margin-left:20px;margin-bottom:6px;">Sends next message only after contact replies, not on a timer</div>
-            <div style="display:flex;gap:8px;margin-left:20px;">
+            <div style="font-size:11px;color:#666;margin-left:20px;margin-bottom:6px;">Sends next message only after contact replies. Uses Delay + Random Delay after reply.</div>
+            <div style="margin-left:20px;">
               <div style="flex:1;">
                 <label style="font-size:10px;font-weight:600;display:block;margin-bottom:2px;color:#666;">Reply timeout (sec)</label>
                 <input id="was-reply-timeout" type="number" value="120" min="10" max="3600" style="width:100%;box-sizing:border-box;padding:4px 6px;border:1px solid #ccc;border-radius:4px;font-size:12px;outline:none;" />
-              </div>
-              <div style="flex:1;">
-                <label style="font-size:10px;font-weight:600;display:block;margin-bottom:2px;color:#666;">Post-reply delay (sec)</label>
-                <input id="was-post-reply-delay" type="number" value="2" min="0.5" max="30" step="0.5" style="width:100%;box-sizing:border-box;padding:4px 6px;border:1px solid #ccc;border-radius:4px;font-size:12px;outline:none;" />
               </div>
             </div>
           </div>
@@ -214,7 +210,6 @@
         randomRange: panel.querySelector('#was-random-range'),
         waitReply: panel.querySelector('#was-wait-reply'),
         replyTimeout: panel.querySelector('#was-reply-timeout'),
-        postReplyDelay: panel.querySelector('#was-post-reply-delay'),
         startBtn: panel.querySelector('#was-start'),
         progressDiv: panel.querySelector('#was-progress'),
         progressText: panel.querySelector('#was-progress-text'),
@@ -289,7 +284,6 @@
         randomDelay: this._inputs.randomToggle.checked ? (parseFloat(this._inputs.randomRange.value) || 0) : 0,
         waitReply: this._inputs.waitReply.checked,
         replyTimeout: parseFloat(this._inputs.replyTimeout.value) || 120,
-        postReplyDelay: parseFloat(this._inputs.postReplyDelay.value) || 2,
       };
     },
 
@@ -659,7 +653,7 @@
     running: false,
     _stopped: false,
 
-    async start({ useCurrentChat, contact, message, repeat, delay, randomDelay, waitReply, replyTimeout, postReplyDelay }) {
+    async start({ useCurrentChat, contact, message, repeat, delay, randomDelay, waitReply, replyTimeout }) {
       if (this.running) return;
 
       // Validate inputs
@@ -723,8 +717,9 @@
 
               if (replyReceived) {
                 Logger.success('Reply received!');
-                Logger.info(`Typing delay: ${postReplyDelay}s...`);
-                await this._sleepInterruptible(postReplyDelay * 1000);
+                const actualDelay = this._calcDelay(delay, randomDelay);
+                Logger.info(`Delay: ${actualDelay.toFixed(1)}s...`);
+                await this._sleepInterruptible(actualDelay * 1000);
               } else {
                 Logger.warn(`⏰ No reply after ${replyTimeout}s. Stopping.`);
                 break;
@@ -877,7 +872,7 @@
     await waitForWhatsAppReady();
     console.log('[WA AutoSender] WhatsApp Web ready. Initializing panel...');
     FloatingPanel.create();
-    Logger.info('WA AutoSender v1.5.1 loaded. Ready to send.');
+    Logger.info('WA AutoSender v1.6.0 loaded. Ready to send.');
     Logger.info('Tip: Check "⏳ Wait for reply" to send only after contact responds.');
   }
 
