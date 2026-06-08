@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WA AutoSender
 // @namespace    https://github.com/ralfiannor/wa-autosender
-// @version      1.0.1
+// @version      1.1.0
 // @description  WhatsApp Web auto-sender — send repeated messages to a contact
 // @author       ralfiannor
 // @match        https://web.whatsapp.com/*
@@ -28,14 +28,6 @@
       'header div[contenteditable="true"]',
     ].join(', '),
 
-    // Search result items in the sidebar
-    searchResultItem: [
-      '#side [role="listitem"]',
-      '#pane-side [role="listitem"]',
-      '#side div[style*="height"][role="listitem"]',
-      'div[data-animate-status-msg="true"]',
-    ].join(', '),
-
     // Chat panel
     chatPanel: '#main',
 
@@ -59,13 +51,10 @@
     activeContactName: '#main header span[title], #main header span[dir="auto"]',
   };
 
-  // Try a single CSS selector string (may contain commas for fallbacks).
-  // Returns the first matching element, or null.
   function querySelector(selectorStr) {
     return document.querySelector(selectorStr);
   }
 
-  // Returns all matching elements, or empty array.
   function querySelectorAll(selectorStr) {
     const els = document.querySelectorAll(selectorStr);
     return els.length ? Array.from(els) : [];
@@ -83,14 +72,13 @@
     _append(level, msg) {
       if (!this._el) return;
       const entry = document.createElement('div');
-      entry.style.cssText = 'padding:2px 0;font-size:12px;border-bottom:1px solid #e0e0e0;word-break:break-word;';
+      entry.style.cssText = 'padding:2px 0;font-size:12px;border-bottom:1px solid #e0e0e0;word-break:break-word;user-select:text;cursor:text;';
       const ts = new Date().toLocaleTimeString();
       const colors = { info: '#333', success: '#128C7E', warn: '#E67E22', error: '#E74C3C' };
       entry.style.color = colors[level] || '#333';
       entry.textContent = `[${ts}] ${msg}`;
       this._el.prepend(entry);
-      // Keep max 100 entries
-      while (this._el.children.length > 100) {
+      while (this._el.children.length > 200) {
         this._el.removeChild(this._el.lastChild);
       }
     },
@@ -99,6 +87,14 @@
     success(msg) { this._append('success', msg); },
     warn(msg) { this._append('warn', msg); },
     error(msg) { this._append('error', msg); },
+
+    getAllText() {
+      if (!this._el) return '';
+      return Array.from(this._el.children)
+        .map(el => el.textContent)
+        .reverse()
+        .join('\n');
+    },
   };
 
   // ─── FloatingPanel ────────────────────────────────────────────────
@@ -168,7 +164,14 @@
             <span id="was-progress-text">0 / 0 sent</span>
           </div>
 
-          <div id="was-log" style="margin-top:10px;max-height:160px;overflow-y:auto;border:1px solid #eee;border-radius:6px;padding:6px;background:#fafafa;display:none;"></div>
+          <div style="margin-top:10px;display:flex;justify-content:space-between;align-items:center;">
+            <span style="font-size:11px;color:#999;">Activity Log</span>
+            <div style="display:flex;gap:4px;">
+              <button id="was-copy-log" title="Copy log to clipboard" style="background:#f0f0f0;border:1px solid #ddd;border-radius:4px;padding:2px 8px;font-size:11px;cursor:pointer;">📋 Copy</button>
+              <button id="was-clear-log" title="Clear log" style="background:#f0f0f0;border:1px solid #ddd;border-radius:4px;padding:2px 8px;font-size:11px;cursor:pointer;">🗑 Clear</button>
+            </div>
+          </div>
+          <div id="was-log" style="margin-top:4px;max-height:180px;overflow-y:auto;border:1px solid #eee;border-radius:6px;padding:6px;background:#fafafa;display:none;user-select:text;"></div>
         </div>
       `;
       document.body.appendChild(panel);
@@ -190,6 +193,27 @@
 
       // Init logger
       Logger.init(this._inputs.logDiv);
+
+      // Copy log button
+      panel.querySelector('#was-copy-log').addEventListener('click', () => {
+        const text = Logger.getAllText();
+        if (!text) return;
+        navigator.clipboard.writeText(text).then(() => {
+          Logger.info('📋 Log copied to clipboard!');
+        }).catch(() => {
+          // Fallback: select text in log
+          const range = document.createRange();
+          range.selectNodeContents(this._inputs.logDiv);
+          const sel = window.getSelection();
+          sel.removeAllRanges();
+          sel.addRange(range);
+        });
+      });
+
+      // Clear log button
+      panel.querySelector('#was-clear-log').addEventListener('click', () => {
+        this._inputs.logDiv.innerHTML = '';
+      });
 
       // Button events
       this._inputs.startBtn.addEventListener('click', () => {
@@ -274,6 +298,52 @@
     },
   };
 
+  // ─── DebugHelper ──────────────────────────────────────────────────
+  // Dumps sidebar DOM structure to log for debugging selector issues.
+
+  const DebugHelper = {
+    dumpSearchResults() {
+      const paneSide = document.querySelector('#pane-side');
+      const side = document.querySelector('#side');
+
+      Logger.info('── DEBUG: Sidebar DOM dump ──');
+
+      // Show what's in #pane-side
+      if (paneSide) {
+        const children = paneSide.querySelectorAll('div[role="listitem"], div[role="list"] > div, [data-tab]');
+        Logger.info(`#pane-side children found: ${children.length}`);
+        const first5 = Array.from(children).slice(0, 5);
+        first5.forEach((el, i) => {
+          const tag = el.tagName.toLowerCase();
+          const role = el.getAttribute('role') || '-';
+          const tab = el.getAttribute('data-tab') || '-';
+          const title = el.getAttribute('title') || '-';
+          const text = el.textContent?.substring(0, 60) || '-';
+          Logger.info(`  [${i}] <${tag}> role="${role}" data-tab="${tab}" title="${title}" text="${text}"`);
+        });
+      } else {
+        Logger.info('#pane-side NOT FOUND');
+      }
+
+      // Broader search: all visible clickable divs in sidebar
+      const sidebarArea = side || paneSide || document.querySelector('#app');
+      if (sidebarArea) {
+        const allDivs = sidebarArea.querySelectorAll('div[role="row"], div[role="listitem"], div[tabindex], a[href*="chat"]');
+        Logger.info(`Broader sidebar elements: ${allDivs.length}`);
+        const first3 = Array.from(allDivs).slice(0, 3);
+        first3.forEach((el, i) => {
+          const tag = el.tagName.toLowerCase();
+          const role = el.getAttribute('role') || '-';
+          const tabindex = el.getAttribute('tabindex') || '-';
+          const text = el.textContent?.substring(0, 80) || '-';
+          Logger.info(`  [${i}] <${tag}> role="${role}" tabindex="${tabindex}" text="${text}"`);
+        });
+      }
+
+      Logger.info('── DEBUG END ──');
+    },
+  };
+
   // ─── ContactFinder ────────────────────────────────────────────────
 
   const ContactFinder = {
@@ -281,7 +351,6 @@
     async findAndOpen(contact) {
       if (!contact) throw new Error('Contact is empty');
 
-      // Normalize: strip whitespace
       const query = contact.trim();
 
       // Step 1: Find the sidebar search input
@@ -304,16 +373,20 @@
         document.execCommand('insertText', false, char);
         await this._sleep(30);
       }
-      await this._sleep(2500);
+      await this._sleep(3000);
 
-      // Step 5: Find and click the first search result
-      const results = querySelectorAll(SELECTORS.searchResultItem);
-      if (!results.length) {
-        throw new Error(`No results found for "${query}"`);
+      // Step 5: Find search result using multiple strategies
+      const result = this._findSearchResult(query);
+
+      if (!result) {
+        // Dump debug info so user can help identify the correct selector
+        Logger.error(`No results found for "${query}"`);
+        DebugHelper.dumpSearchResults();
+        throw new Error(`No results found for "${query}". Log copied — check debug dump above.`);
       }
 
-      const firstResult = results[0];
-      firstResult.click();
+      Logger.info(`Found result element: <${result.tagName}> role="${result.getAttribute('role') || '-'}"`);
+      result.click();
       await this._sleep(1500);
 
       // Step 6: Verify chat panel opened
@@ -327,6 +400,85 @@
       await this._sleep(500);
 
       Logger.success(`Opened chat for "${query}"`);
+    },
+
+    _findSearchResult(query) {
+      // Strategy 1: role="listitem" inside sidebar
+      const listItems = document.querySelectorAll('#pane-side [role="listitem"], #side [role="listitem"]');
+      if (listItems.length) {
+        Logger.info(`Strategy 1 (listitem): found ${listItems.length} items`);
+        // Try to find one whose text contains the query
+        for (const item of listItems) {
+          const text = item.textContent || '';
+          if (text.toLowerCase().includes(query.toLowerCase())) {
+            return item;
+          }
+        }
+        // If no text match, return first visible one (might be filtered search results)
+        return listItems[0];
+      }
+
+      // Strategy 2: role="row" (WhatsApp sometimes uses this)
+      const rows = document.querySelectorAll('#pane-side [role="row"], #side [role="row"]');
+      if (rows.length) {
+        Logger.info(`Strategy 2 (row): found ${rows.length} items`);
+        for (const row of rows) {
+          const text = row.textContent || '';
+          if (text.toLowerCase().includes(query.toLowerCase())) {
+            return row;
+          }
+        }
+        return rows[0];
+      }
+
+      // Strategy 3: Elements with tabindex in sidebar (clickable items)
+      const tabbable = document.querySelectorAll('#pane-side [tabindex], #side [tabindex]');
+      const filtered = Array.from(tabbable).filter(el => {
+        // Filter to elements that are direct enough to be chat items
+        const rect = el.getBoundingClientRect();
+        return rect.width > 100 && rect.height > 20;
+      });
+      if (filtered.length) {
+        Logger.info(`Strategy 3 (tabindex+visible): found ${filtered.length} items`);
+        for (const el of filtered) {
+          const text = el.textContent || '';
+          if (text.toLowerCase().includes(query.toLowerCase())) {
+            return el;
+          }
+        }
+        return filtered[0];
+      }
+
+      // Strategy 4: Any clickable-looking div inside sidebar that contains query text
+      const sideEl = document.querySelector('#pane-side') || document.querySelector('#side');
+      if (sideEl) {
+        const allDivs = sideEl.querySelectorAll('div, a');
+        Logger.info(`Strategy 4 (brute): scanning ${allDivs.length} elements`);
+        for (const el of allDivs) {
+          // Look for elements that have the query text and look like contact rows
+          const spans = el.querySelectorAll('span[dir="auto"], span[title]');
+          for (const span of spans) {
+            const spanText = span.textContent || span.getAttribute('title') || '';
+            if (spanText.toLowerCase().includes(query.toLowerCase())) {
+              // Walk up to find the clickable parent
+              let clickable = el;
+              for (let i = 0; i < 5; i++) {
+                if (clickable.getAttribute('role') === 'listitem' ||
+                    clickable.getAttribute('role') === 'row' ||
+                    clickable.hasAttribute('tabindex') ||
+                    clickable.tagName === 'A') {
+                  return clickable;
+                }
+                clickable = clickable.parentElement;
+                if (!clickable) break;
+              }
+              return el;
+            }
+          }
+        }
+      }
+
+      return null;
     },
 
     _sleep(ms) {
@@ -370,7 +522,6 @@
       await this._sleep(300);
       const sendBtn = querySelector(SELECTORS.sendButton);
       if (sendBtn) {
-        // Check if message is still in the input (wasn't sent by Enter)
         if (input.textContent.trim().length > 0) {
           sendBtn.click();
         }
@@ -479,7 +630,6 @@
   function waitForWhatsAppReady() {
     return new Promise((resolve) => {
       const check = setInterval(() => {
-        // Check if WhatsApp Web main app has rendered
         const app = document.querySelector('#app');
         const main = document.querySelector('#main') || document.querySelector('#side');
         if (app && main) {
@@ -487,7 +637,6 @@
           resolve();
         }
       }, 500);
-      // Timeout after 30s
       setTimeout(() => {
         clearInterval(check);
         resolve();
@@ -500,7 +649,8 @@
     await waitForWhatsAppReady();
     console.log('[WA AutoSender] WhatsApp Web ready. Initializing panel...');
     FloatingPanel.create();
-    Logger.info('WA AutoSender loaded. Ready to send.');
+    Logger.info('WA AutoSender v1.1.0 loaded. Ready to send.');
+    Logger.info('Tip: Click 📋 Copy to copy the log for debugging.');
   }
 
   init();
