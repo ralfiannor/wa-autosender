@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WA AutoSender
 // @namespace    https://github.com/ralfiannor/wa-autosender
-// @version      1.3.2
+// @version      1.3.3
 // @description  WhatsApp Web auto-sender — send repeated messages to a contact
 // @author       ralfiannor
 // @match        https://web.whatsapp.com/*
@@ -596,82 +596,89 @@
       FloatingPanel.setRunning(true);
       FloatingPanel.updateProgress(0, repeat);
 
-      // If "send to current chat" is enabled, skip contact search
-      if (useCurrentChat) {
-        Logger.info(`Starting: ${repeat}x to current chat${waitReply ? ' (wait for reply)' : ''}`);
-        const chatPanel = querySelector(SELECTORS.chatPanel);
-        if (!chatPanel) {
-          Logger.error('No chat is open. Open a chat first, then start.');
-          this._finish();
-          return;
-        }
-      } else {
-        if (!contact) { Logger.error('Contact is required (or check "Send to current chat")'); this._finish(); return; }
-        Logger.info(`Starting: ${repeat}x to "${contact}"${waitReply ? ' (wait for reply)' : ''}`);
+      try {
+        // If "send to current chat" is enabled, skip contact search
+        if (useCurrentChat) {
+          Logger.info(`Starting: ${repeat}x to current chat${waitReply ? ' (wait for reply)' : ''}`);
+          const chatPanel = querySelector(SELECTORS.chatPanel);
+          if (!chatPanel) {
+            Logger.error('No chat is open. Open a chat first, then start.');
+            return;
+          }
+        } else {
+          if (!contact) { Logger.error('Contact is required (or check "Send to current chat")'); return; }
+          Logger.info(`Starting: ${repeat}x to "${contact}"${waitReply ? ' (wait for reply)' : ''}`);
 
-        try {
-          await ContactFinder.findAndOpen(contact);
-        } catch (err) {
-          Logger.error(`Contact error: ${err.message}`);
-          this._finish();
-          return;
-        }
-      }
-
-      // Send loop
-      let sent = 0;
-      for (let i = 0; i < repeat; i++) {
-        if (this._stopped) break;
-
-        try {
-          await MessageSender.send(message);
-          sent++;
-          FloatingPanel.updateProgress(sent, repeat);
-          Logger.info(`[${sent}/${repeat}] Sent`);
-        } catch (err) {
-          Logger.error(`Send error: ${err.message}`);
-          break;
-        }
-
-        // Wait before next iteration (skip after last message)
-        if (i < repeat - 1 && !this._stopped) {
-
-          if (waitReply) {
-            // ── Wait for reply mode ──
-            // After our message is sent & rendered, snapshot the message count.
-            // Any NEW message appearing after this snapshot = reply from contact.
-            await this._sleep(1500); // wait for our message to render in DOM
-            const snapshot = this._countChatMessages();
-            Logger.info(`⏳ Waiting for reply... (timeout: ${replyTimeout}s, snapshot: ${snapshot} msgs)`);
-
-            const replyReceived = await this._waitForReply(snapshot, replyTimeout * 1000);
-
-            if (this._stopped) break;
-
-            if (replyReceived) {
-              Logger.success('Reply received!');
-              Logger.info(`Typing delay: ${postReplyDelay}s...`);
-              await this._sleepInterruptible(postReplyDelay * 1000);
-            } else {
-              Logger.warn(`⏰ No reply after ${replyTimeout}s. Stopping.`);
-              break;
-            }
-          } else {
-            // ── Timer delay mode (original) ──
-            const actualDelay = this._calcDelay(delay, randomDelay);
-            Logger.info(`Waiting ${actualDelay.toFixed(1)}s...`);
-            await this._sleepInterruptible(actualDelay * 1000);
+          try {
+            await ContactFinder.findAndOpen(contact);
+          } catch (err) {
+            Logger.error(`Contact error: ${err.message}`);
+            return;
           }
         }
-      }
 
-      Logger.info(`Done. ${sent}/${repeat} messages sent.`);
-      this._finish();
+        // Send loop
+        let sent = 0;
+        for (let i = 0; i < repeat; i++) {
+          if (this._stopped) break;
+
+          try {
+            await MessageSender.send(message);
+            sent++;
+            FloatingPanel.updateProgress(sent, repeat);
+            Logger.info(`[${sent}/${repeat}] Sent`);
+          } catch (err) {
+            Logger.error(`Send error: ${err.message}`);
+            break;
+          }
+
+          // Wait before next iteration (skip after last message)
+          if (i < repeat - 1 && !this._stopped) {
+
+            if (waitReply) {
+              // ── Wait for reply mode ──
+              await this._sleep(1500); // wait for our message to render in DOM
+              const snapshot = this._countChatMessages();
+              Logger.info(`⏳ Waiting for reply... (timeout: ${replyTimeout}s, snapshot: ${snapshot} msgs)`);
+
+              const replyReceived = await this._waitForReply(snapshot, replyTimeout * 1000);
+
+              if (this._stopped) break;
+
+              if (replyReceived) {
+                Logger.success('Reply received!');
+                Logger.info(`Typing delay: ${postReplyDelay}s...`);
+                await this._sleepInterruptible(postReplyDelay * 1000);
+              } else {
+                Logger.warn(`⏰ No reply after ${replyTimeout}s. Stopping.`);
+                break;
+              }
+            } else {
+              // ── Timer delay mode (original) ──
+              const actualDelay = this._calcDelay(delay, randomDelay);
+              Logger.info(`Waiting ${actualDelay.toFixed(1)}s...`);
+              await this._sleepInterruptible(actualDelay * 1000);
+            }
+          }
+        }
+
+        Logger.info(`Done. ${sent}/${repeat} messages sent.`);
+
+      } catch (err) {
+        // Catch any unexpected errors so _finish() always runs
+        Logger.error(`Unexpected error: ${err.message}`);
+        console.error('[WA AutoSender]', err);
+      } finally {
+        // ALWAYS reset state and UI, no matter what
+        this._finish();
+      }
     },
 
     stop() {
       Logger.warn('Stopping...');
       this._stopped = true;
+      // Immediately reset UI so user sees the button change
+      FloatingPanel.setRunning(false);
     },
 
     _finish() {
@@ -813,7 +820,7 @@
     await waitForWhatsAppReady();
     console.log('[WA AutoSender] WhatsApp Web ready. Initializing panel...');
     FloatingPanel.create();
-    Logger.info('WA AutoSender v1.3.2 loaded. Ready to send.');
+    Logger.info('WA AutoSender v1.3.3 loaded. Ready to send.');
     Logger.info('Tip: Check "⏳ Wait for reply" to send only after contact responds.');
   }
 
