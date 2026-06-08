@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WA AutoSender
 // @namespace    https://github.com/ralfiannor/wa-autosender
-// @version      1.1.0
+// @version      1.2.0
 // @description  WhatsApp Web auto-sender — send repeated messages to a contact
 // @author       ralfiannor
 // @match        https://web.whatsapp.com/*
@@ -131,6 +131,10 @@
           </div>
         </div>
         <div id="was-body" style="padding:12px;">
+          <label style="font-size:12px;display:flex;align-items:center;gap:6px;margin-bottom:6px;">
+            <input id="was-current-chat" type="checkbox" style="cursor:pointer;" />
+            <span style="font-weight:600;">📍 Send to current chat</span>
+          </label>
           <label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px;">Contact Name or Number (+62...)</label>
           <input id="was-contact" type="text" placeholder="e.g. John or +62812345678" style="width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid #ccc;border-radius:6px;font-size:13px;margin-bottom:10px;outline:none;" />
 
@@ -179,6 +183,7 @@
 
       // Cache input references
       this._inputs = {
+        currentChat: panel.querySelector('#was-current-chat'),
         contact: panel.querySelector('#was-contact'),
         message: panel.querySelector('#was-message'),
         repeat: panel.querySelector('#was-repeat'),
@@ -190,6 +195,14 @@
         progressText: panel.querySelector('#was-progress-text'),
         logDiv: panel.querySelector('#was-log'),
       };
+
+      // Toggle contact field based on "current chat" checkbox
+      this._inputs.currentChat.addEventListener('change', () => {
+        const useCurrent = this._inputs.currentChat.checked;
+        this._inputs.contact.disabled = useCurrent;
+        this._inputs.contact.style.opacity = useCurrent ? '0.4' : '1';
+        this._inputs.contact.style.background = useCurrent ? '#f5f5f5' : '#fff';
+      });
 
       // Init logger
       Logger.init(this._inputs.logDiv);
@@ -238,6 +251,7 @@
 
     _getValues() {
       return {
+        useCurrentChat: this._inputs.currentChat.checked,
         contact: this._inputs.contact.value.trim(),
         message: this._inputs.message.value.trim(),
         repeat: parseInt(this._inputs.repeat.value, 10) || 1,
@@ -542,27 +556,40 @@
     running: false,
     _stopped: false,
 
-    async start({ contact, message, repeat, delay, randomDelay }) {
+    async start({ useCurrentChat, contact, message, repeat, delay, randomDelay }) {
       if (this.running) return;
 
       // Validate inputs
-      if (!contact) { Logger.error('Contact is required'); return; }
       if (!message) { Logger.error('Message is required'); return; }
+      if (!useCurrentChat && !contact) { Logger.error('Contact is required (or check "Send to current chat")'); return; }
       if (repeat < 1) { Logger.error('Repeat count must be ≥ 1'); return; }
 
       this.running = true;
       this._stopped = false;
       FloatingPanel.setRunning(true);
       FloatingPanel.updateProgress(0, repeat);
-      Logger.info(`Starting: ${repeat}x to "${contact}"`);
 
-      try {
-        // Find and open the contact chat
-        await ContactFinder.findAndOpen(contact);
-      } catch (err) {
-        Logger.error(`Contact error: ${err.message}`);
-        this._finish();
-        return;
+      // If "send to current chat" is enabled, skip contact search
+      if (useCurrentChat) {
+        Logger.info(`Starting: ${repeat}x to current chat`);
+        // Verify a chat is actually open
+        const chatPanel = querySelector(SELECTORS.chatPanel);
+        if (!chatPanel) {
+          Logger.error('No chat is open. Open a chat first, then start.');
+          this._finish();
+          return;
+        }
+      } else {
+        if (!contact) { Logger.error('Contact is required (or check "Send to current chat")'); this._finish(); return; }
+        Logger.info(`Starting: ${repeat}x to "${contact}"`);
+
+        try {
+          await ContactFinder.findAndOpen(contact);
+        } catch (err) {
+          Logger.error(`Contact error: ${err.message}`);
+          this._finish();
+          return;
+        }
       }
 
       // Send loop
@@ -649,8 +676,8 @@
     await waitForWhatsAppReady();
     console.log('[WA AutoSender] WhatsApp Web ready. Initializing panel...');
     FloatingPanel.create();
-    Logger.info('WA AutoSender v1.1.0 loaded. Ready to send.');
-    Logger.info('Tip: Click 📋 Copy to copy the log for debugging.');
+    Logger.info('WA AutoSender v1.2.0 loaded. Ready to send.');
+    Logger.info('Tip: Check "Send to current chat" to skip contact search.');
   }
 
   init();
