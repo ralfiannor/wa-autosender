@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WA AutoSender
 // @namespace    https://github.com/ralfiannor/wa-autosender
-// @version      1.4.0
+// @version      1.5.0
 // @description  WhatsApp Web auto-sender — send repeated messages to a contact
 // @author       ralfiannor
 // @match        https://web.whatsapp.com/*
@@ -764,20 +764,28 @@
     },
 
     // Get a fingerprint of the chat content.
-    // Doesn't rely on specific selectors — just measures the total DOM
-    // content size. Any new message will change this value.
+    // Uses querySelectorAll from document root — proven to work per debug dump
+    // where #main div[data-id] found 28 elements and #main div[role="row"] found 28.
     _getChatFingerprint() {
+      // Strategy 1: count div[data-id] inside #main (confirmed working: 28 found)
+      const dataIdCount = document.querySelectorAll('#main div[data-id]').length;
+      if (dataIdCount > 0) return dataIdCount;
+
+      // Strategy 2: count div[role="row"] inside #main (confirmed working: 28 found)
+      const rowCount = document.querySelectorAll('#main div[role="row"]').length;
+      if (rowCount > 0) return rowCount;
+
+      // Strategy 3: count span[dir] inside #main (confirmed working: 58 found)
+      const spanCount = document.querySelectorAll('#main span[dir]').length;
+      if (spanCount > 0) return spanCount;
+
+      // Fallback: total element count from document
       const main = document.querySelector('#main');
-      if (!main) return 0;
+      if (main) {
+        return main.querySelectorAll('*').length;
+      }
 
-      // Primary: innerHTML length (most reliable — any new content changes it)
-      const htmlLen = main.innerHTML.length;
-
-      // Secondary: total element count
-      const elCount = main.querySelectorAll('*').length;
-
-      // Combine both for a stable fingerprint
-      return htmlLen + elCount;
+      return 0;
     },
 
     // Wait for the chat fingerprint to change (new content = reply).
@@ -874,8 +882,7 @@
     await waitForWhatsAppReady();
     console.log('[WA AutoSender] WhatsApp Web ready. Initializing panel...');
     FloatingPanel.create();
-    Logger.info('WA AutoSender v1.4.0 loaded. Ready to send.');
-    Logger.info('Tip: Click 🔍 Debug then 📋 Copy to help fix selectors.');
+    Logger.info('WA AutoSender v1.5.0 loaded. Ready to send.');
     Logger.info('Tip: Check "⏳ Wait for reply" to send only after contact responds.');
   }
 
